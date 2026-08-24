@@ -63,7 +63,11 @@ def main() -> int:
         default="openrouter/google/gemini-3.7-flash",
         help="tie-breaker judge for --cascade (default: %(default)s)",
     )
-    ap.add_argument("--corpus", default=str(REPO / "data/private/corpus.jsonl"))
+    ap.add_argument(
+        "--corpus",
+        default="data/private/corpus.jsonl",
+        help="path to corpus jsonl relative to repo (default: %(default)s)",
+    )
     ap.add_argument("--dry-run", action="store_true", help="load corpus and judges only")
     args = ap.parse_args()
 
