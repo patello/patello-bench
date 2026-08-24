@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -45,6 +46,22 @@ def main() -> int:
         "--jury",
         default=None,
         help="comma-separated instructor model slugs; overrides --judge-model with a Jury (majority vote)",
+    )
+    ap.add_argument(
+        "--cascade",
+        action="store_true",
+        help="two cheap judges in parallel; on disagreement, gemini tie-breaker. "
+        "Configure via --cheap-judges / --tie-breaker.",
+    )
+    ap.add_argument(
+        "--cheap-judges",
+        default="openrouter/deepseek/deepseek-v4-flash,openrouter/qwen/qwen3.5-flash",
+        help="comma-separated cheap tier (default: %(default)s)",
+    )
+    ap.add_argument(
+        "--tie-breaker",
+        default="openrouter/google/gemini-3.7-flash",
+        help="tie-breaker judge for --cascade (default: %(default)s)",
     )
     ap.add_argument("--corpus", default=str(REPO / "data/private/corpus.jsonl"))
     ap.add_argument("--dry-run", action="store_true", help="load corpus and judges only")
@@ -81,7 +98,60 @@ def main() -> int:
 
     tp = fp = tn = fn = 0
     with out_path.open("w") as out:
+        def judge_row(judge_cls, model, inp, outp):
+            return judge_cls(model=model).judge(input=inp, output=outp)
+
         for r in rows:
+            if getattr(args, "cascade", False):
+                cheap = [m.strip() for m in args.cheap_judges.split(",")]
+                with ThreadPoolExecutor(max_workers=len(cheap)) as ex:
+                    futures = {
+                        m: ex.submit(judge_row, JUDGES[r["judge"]], m, r["input"], r["output"])
+                        for m in cheap
+                    }
+                    cheap_judgments = {m: f.result() for m, f in futures.items()}
+                cheap_scores = {m: bool(jd.score) for m, jd in cheap_judgments.items()}
+                distinct = set(cheap_scores.values())
+                tie_broken = None
+                tie_reasoning = None
+                if len(distinct) > 1:
+                    tb = judge_row(JUDGES[r["judge"]], args.tie_breaker, r["input"], r["output"])
+                    tie_broken = bool(tb.score)
+                    tie_reasoning = tb.reasoning
+                    predicted_fail = tie_broken
+                else:
+                    predicted_fail = next(iter(distinct))
+                reasoning = " || ".join(
+                    f"[{m}] {jd.reasoning}" for m, jd in cheap_judgments.items()
+                )
+                if tie_reasoning is not None:
+                    reasoning += f" || [TIE-BREAKER {args.tie_breaker}] {tie_reasoning}"
+                per_judge = dict(cheap_scores)
+                if tie_broken is not None:
+                    per_judge[f"{args.tie_breaker} (tie-breaker)"] = tie_broken
+                human_fail = bool(r["label"])
+                rec = {
+                    "id": r["id"],
+                    "judge": r["judge"],
+                    "mode": "cascade",
+                    "human_label_fail": human_fail,
+                    "predicted_fail": predicted_fail,
+                    "match": predicted_fail == human_fail,
+                    "judge_reasoning": reasoning,
+                    "per_judge": per_judge,
+                    "model": r.get("model"),
+                    "host_window": r.get("host_window"),
+                }
+                out.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                tie = " tie->" + ("F" if tie_broken else "P") if tie_broken is not None else ""
+                print(f"  {r['id']}: pred={'FAIL' if predicted_fail else 'PASS'} "
+                      f"human={'FAIL' if human_fail else 'PASS'} "
+                      f"{'ok' if rec['match'] else 'MISMATCH'}{tie}")
+                tp += predicted_fail and human_fail
+                fp += predicted_fail and not human_fail
+                tn += not predicted_fail and not human_fail
+                fn += not predicted_fail and human_fail
+                continue
             if jury_models:
                 jury = Jury(
                     judges=[JUDGES[r["judge"]](model=m.strip()) for m in jury_models],
@@ -90,9 +160,13 @@ def main() -> int:
                 verdict = jury.vote(input=r["input"], output=r["output"])
                 predicted_fail = bool(verdict.score)
                 reasoning = " || ".join(
-                    f"[{jd.model}] {jd.reasoning}" for jd in verdict.judgments
+                    f"[{m}] {jd.reasoning}"
+                    for m, jd in zip(jury_models, verdict.judgments)
                 )
-                per_judge = {jd.model: bool(jd.score) for jd in verdict.judgments}
+                per_judge = {
+                    m.strip(): bool(jd.score)
+                    for m, jd in zip(jury_models, verdict.judgments)
+                }
             else:
                 j = JUDGES[r["judge"]](model=args.judge_model)
                 judgment = j.judge(input=r["input"], output=r["output"])
