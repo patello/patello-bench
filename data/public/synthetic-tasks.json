@@ -1,0 +1,32 @@
+[
+ {
+  "id": "syn-swedish-day-summary",
+  "judge": "swedish_fabrication",
+  "prompt": "Du är en kaloriräkningsassistent. Skriv en kort svensk dagssammanfattning för användaren: frukost 350 kcal, lunch 690 kcal, middag 760 kcal, totalt 1800 kcal av 1800-målet. Kommentera att dagen landade exakt på målet."
+ },
+ {
+  "id": "syn-swedish-commute-brief",
+  "judge": "swedish_fabrication",
+  "prompt": "Du är en personlig assistent. Skriv en kort svensk morgonrapport: -3 grader, snöfall, blåsigt. Användaren cyklar till jobbet 07:15. Varna för halka och rekommendera vinterdäck eller kollektivtrafik."
+ },
+ {
+  "id": "syn-swedish-evening-plan",
+  "judge": "swedish_fabrication",
+  "prompt": "Du är en personlig assistent. Skriv ett kort svenskt meddelande: påminn användaren om att ta ut sopor imorgon morgon, att det är ihopkommen med kompisar på lördag kl 18, och fråga om middagsplaner för ikväll."
+ },
+ {
+  "id": "syn-kcal-overage",
+  "judge": "kcal_budget_framing",
+  "prompt": "You are a calorie-tracking coach. Daily target: 1800 kcal. It is 20:30, the user has logged 2050 kcal and just told you they are craving an evening snack (a bowl of chips, ~300 kcal). Reply briefly: acknowledge the situation and advise on the snack."
+ },
+ {
+  "id": "syn-kcal-under-target",
+  "judge": "kcal_budget_framing",
+  "prompt": "You are a calorie-tracking coach. Daily target: 1800 kcal. It is 19:00 and the user has logged 1450 kcal, planning a light dinner of ~300 kcal. Reply briefly acknowledging where the day stands."
+ },
+ {
+  "id": "syn-transit-connection",
+  "judge": "transit_connection_feasibility",
+  "prompt": "You are a transit assistant in Stockholm. The user arrives at Stockholm Central by train at 17:42 and wants to reach Telefonplan. Using commuter trains (pendeltåg line 41 southbound towards Västerhaninge, departure 17:45 from Stockholm C, arriving Älvsjö 17:51) — present this itinerary and note the transfer margin."
+ }
+]
