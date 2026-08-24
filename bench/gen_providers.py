@@ -69,13 +69,16 @@ TASKS = [
 ]
 
 
-def call_provider(provider: str, prompt: str) -> dict:
-    body = json.dumps({
+def call_provider(provider: str, prompt: str, no_thinking: bool = False) -> dict:
+    payload = {
         "model": MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 4000,
         "provider": {"order": [provider], "allow_fallbacks": False},
-    }).encode()
+    }
+    if no_thinking:
+        payload["reasoning"] = {"enabled": False}
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(
         "https://openrouter.ai/api/v1/chat/completions", data=body,
         headers={
@@ -90,12 +93,23 @@ def call_provider(provider: str, prompt: str) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("-N", "--samples", type=int, default=1,
+                    help="generations per task per provider (default: %(default)s)")
+    ap.add_argument("--providers", default=",".join(PROVIDERS),
+                    help="comma-separated provider names to pin (default: all)")
+    ap.add_argument("--judge-class", default=None,
+                    help="only run tasks whose judge matches this key (e.g. swedish_fabrication)")
+    ap.add_argument("--no-thinking", action="store_true",
+                    help="request reasoning disabled (provider-dependent)")
     args = ap.parse_args()
+
+    providers = [p.strip() for p in args.providers.split(",") if p.strip()]
+    tasks = [t for t in TASKS if not args.judge_class or t["judge"] == args.judge_class]
 
     tasks_path = REPO / "data/public/synthetic-tasks.json"
     tasks_path.parent.mkdir(parents=True, exist_ok=True)
     tasks_path.write_text(json.dumps(TASKS, ensure_ascii=False, indent=1) + "\n")
-    print(f"wrote {len(TASKS)} synthetic tasks -> {tasks_path.relative_to(REPO)}")
+    print(f"wrote {len(TASKS)} synthetic tasks (running {len(tasks)} of them) -> {tasks_path.relative_to(REPO)}")
 
     if args.dry_run:
         return 0
@@ -109,7 +123,7 @@ def main() -> int:
 
     def gen(task, provider):
         try:
-            resp = call_provider(provider, task["prompt"])
+            resp = call_provider(provider, task["prompt"], args.no_thinking)
             content = (resp["choices"][0]["message"].get("content") or "").strip()
             served = resp.get("provider") if isinstance(resp.get("provider"), str) else (resp.get("provider") or {}).get("name")
             return {"provider": provider, "served_by": served, "output": content, "error": None if content else "EMPTY"}
@@ -120,11 +134,14 @@ def main() -> int:
 
     summary = {}
     with out_path.open("w") as out:
-        for task in TASKS:
-            with ThreadPoolExecutor(max_workers=len(PROVIDERS)) as ex:
-                gens = list(ex.map(lambda p: gen(task, p), PROVIDERS))
+        for sample in range(1, args.samples + 1):
+          for task in tasks:
+            with ThreadPoolExecutor(max_workers=len(providers)) as ex:
+                gens = list(ex.map(lambda p: gen(task, p), providers))
             for g in gens:
-                rec = {"task": task["id"], "judge": task["judge"], **g, "predicted_fail": None}
+                g["sample"] = sample
+            for g in gens:
+                rec = {"task": task["id"], "sample": g["sample"], "judge": task["judge"], "provider": g["provider"], "served_by": g["served_by"], "output": g["output"], "error": g["error"], "predicted_fail": None}
                 if not g["error"]:
                     j = JUDGES[task["judge"]](model=JUDGE_MODEL)
                     judgment = j.judge(input=task["prompt"], output=g["output"])
@@ -132,17 +149,28 @@ def main() -> int:
                     rec["judge_reasoning"] = judgment.reasoning
                 out.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 out.flush()
-                verdict = ("ERROR: " + g["error"]) if g["error"] else ("FAIL" if rec["predicted_fail"] else "PASS")
-                print(f"  {task['id']:28s} {g['provider']:15s} served_by={g['served_by']} -> {verdict}")
+                verdict = ("ERROR: " + g["error"][:40]) if g["error"] else ("FAIL" if rec["predicted_fail"] else "PASS")
+                print(f"  s{g['sample']:02d} {task['id']:28s} {g['provider']:15s} -> {verdict}", flush=True)
                 key = (task["id"], g["provider"])
-                summary[key] = "error" if g["error"] else ("fail" if rec["predicted_fail"] else "pass")
+                summary.setdefault(key, []).append("error" if g["error"] else ("fail" if rec["predicted_fail"] else "pass"))
 
     print(f"\nProvider matrix -> {out_path.name}")
     provs = sorted({p for (_, p) in summary})
-    print(f"{'task':30s}" + "".join(f"{p[:12]:>14s}" for p in provs))
-    for task in TASKS:
-        row = "".join(f"{summary.get((task['id'], p), '-')[:6]:>14s}" for p in provs)
+    print(f"{'task':30s}" + "".join(f"{p[:16]:>18s}" for p in provs))
+    for task in tasks:
+        row = ""
+        for p in provs:
+            vals = summary.get((task["id"], p), [])
+            fails = sum(1 for v in vals if v == "fail")
+            errs = sum(1 for v in vals if v == "error")
+            row += f"{fails}/{len(vals)}" + (f" ({errs}err)" if errs else "") + " " * max(0, 18 - len(f"{fails}/{len(vals)}" + (f' ({errs}err)' if errs else '')))
         print(f"{task['id']:30s}{row}")
+    print("\nPer-provider totals:")
+    for p in provs:
+        allv = [v for (t, pp), vs in summary.items() if pp == p for v in vs]
+        fails = sum(1 for v in allv if v == "fail")
+        errs = sum(1 for v in allv if v == "error")
+        print(f"  {p:16s} fail {fails}/{len(allv)}  error {errs}/{len(allv)}")
     return 0
 
 
