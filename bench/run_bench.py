@@ -55,7 +55,7 @@ def main() -> int:
     )
     ap.add_argument(
         "--cheap-judges",
-        default="openrouter/deepseek/deepseek-v4-flash,openrouter/qwen/qwen3.5-flash",
+        default="openrouter/deepseek/deepseek-v4-flash,openrouter/qwen/qwen3.7-flash",
         help="comma-separated cheap tier (default: %(default)s)",
     )
     ap.add_argument(
