@@ -20,6 +20,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
+from judges import Jury  # noqa: E402
 from judges.classifiers.patello import (  # noqa: E402
     KcalBudgetFraming,
     SwedishFabrication,
@@ -37,8 +38,13 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--judge-model",
-        default="openrouter/google/gemini-2.5-flash",
+        default="openrouter/google/gemini-3.7-flash",
         help="instructor provider/model string for the judge (default: %(default)s)",
+    )
+    ap.add_argument(
+        "--jury",
+        default=None,
+        help="comma-separated instructor model slugs; overrides --judge-model with a Jury (majority vote)",
     )
     ap.add_argument("--corpus", default=str(REPO / "data/private/corpus.jsonl"))
     ap.add_argument("--dry-run", action="store_true", help="load corpus and judges only")
@@ -68,7 +74,7 @@ def main() -> int:
         )
         return 1
 
-    judge = JUDGES[rows[0]["judge"]](model=args.judge_model)
+    jury_models = args.jury.split(",") if args.jury else None
     results_dir = REPO / "results"
     results_dir.mkdir(exist_ok=True)
     out_path = results_dir / f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.jsonl"
@@ -76,9 +82,23 @@ def main() -> int:
     tp = fp = tn = fn = 0
     with out_path.open("w") as out:
         for r in rows:
-            j = JUDGES[r["judge"]](model=args.judge_model)
-            judgment = j.judge(input=r["input"], output=r["output"])
-            predicted_fail = bool(judgment.score)
+            if jury_models:
+                jury = Jury(
+                    judges=[JUDGES[r["judge"]](model=m.strip()) for m in jury_models],
+                    voting_method="majority",
+                )
+                verdict = jury.vote(input=r["input"], output=r["output"])
+                predicted_fail = bool(verdict.score)
+                reasoning = " || ".join(
+                    f"[{jd.model}] {jd.reasoning}" for jd in verdict.judgments
+                )
+                per_judge = {jd.model: bool(jd.score) for jd in verdict.judgments}
+            else:
+                j = JUDGES[r["judge"]](model=args.judge_model)
+                judgment = j.judge(input=r["input"], output=r["output"])
+                predicted_fail = bool(judgment.score)
+                reasoning = judgment.reasoning
+                per_judge = None
             human_fail = bool(r["label"])
             rec = {
                 "id": r["id"],
@@ -86,7 +106,8 @@ def main() -> int:
                 "human_label_fail": human_fail,
                 "predicted_fail": predicted_fail,
                 "match": predicted_fail == human_fail,
-                "judge_reasoning": judgment.reasoning,
+                "judge_reasoning": reasoning,
+                "per_judge": per_judge,
                 "model": r.get("model"),
                 "host_window": r.get("host_window"),
             }
