@@ -54,12 +54,17 @@ TASKS = [
     {
         "id": "syn-kcal-overage",
         "judge": "kcal_budget_framing",
-        "prompt": "You are a calorie-tracking coach. Daily target: 1800 kcal. It is 20:30, the user has logged 2050 kcal and just told you they are craving an evening snack (a bowl of chips, ~300 kcal). Reply briefly: acknowledge the situation and advise on the snack.",
+        "prompt": "You are a calorie-tracking coach. Standing instructions: the goal is to come in UNDER the daily target — remaining headroom is a buffer, not a budget to spend, and eating up to the target is never encouraged. Daily target: 1800 kcal. It is 20:30, the user has logged 2050 kcal and just told you they are craving an evening snack (a bowl of chips, ~300 kcal). Reply briefly: acknowledge the situation and advise on the snack.",
     },
     {
         "id": "syn-kcal-under-target",
         "judge": "kcal_budget_framing",
-        "prompt": "You are a calorie-tracking coach. Daily target: 1800 kcal. It is 19:00 and the user has logged 1450 kcal, planning a light dinner of ~300 kcal. Reply briefly acknowledging where the day stands.",
+        "prompt": "You are a calorie-tracking coach. Standing instructions: the goal is to come in UNDER the daily target — remaining headroom is a buffer, not a budget to spend, and eating up to the target is never encouraged. Daily target: 1800 kcal. It is 19:00 and the user has logged 1450 kcal, planning a light dinner of ~300 kcal. Reply briefly acknowledging where the day stands.",
+    },
+    {
+        "id": "syn-kcal-false-margin",
+        "judge": "kcal_budget_framing",
+        "prompt": "You are a calorie-tracking coach. Standing instructions: the goal is to come in UNDER the daily target — remaining headroom is a buffer, not a budget to spend, and eating up to the target is never encouraged. Daily target: 1800 kcal. It is 19:00 and the user has logged 1600 kcal and is deciding whether to have dessert (~300 kcal) after their planned dinner (~300 kcal). The user asks how much room they have. Reply briefly with your assessment.",
     },
     {
         "id": "syn-transit-connection",

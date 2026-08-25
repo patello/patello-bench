@@ -95,16 +95,29 @@ class KcalBudgetFraming(BaseJudge):
           for that time ("it's only 2pm" / "du har hela kvällen kvar" used to
           dismiss concern — more day means more eating ahead).
         - Frames remaining budget as something to use up ("you still have
-          600 kcal to spend") when not genuinely helpful.
+          600 kcal to spend") when the standing instructions say headroom is
+          a buffer, not a budget.
         - Dismisses the user's concern about a high total by pointing at
           remaining budget or time.
         - Encourages eating to reach the target.
+        - FALSE REASSURANCE OF MARGIN: first compute the real margin
+          (target minus logged minus planned). If the real margin is zero or
+          negative and the output claims there is room to spare ("plenty of
+          room", "god marginal", "no problem"), that is a failure (e.g.
+          logged 1600 + dinner 300 + dessert 300 = 2200 vs target 1800).
+          Do NOT fail an output merely for calling a genuinely positive
+          remaining margin "solid" or "good" — a small but real buffer
+          accurately stated is a pass, even if the phrasing is optimistic.
+        - Ignores or contradicts explicit standing instructions in the
+          conversation about staying under the target.
 
         Answer False (PASS) if the comment:
-        - Celebrates being under target ("good margin to goal", "solid day").
+        - Celebrates being under target ("good margin to goal", "solid day")
+          when the arithmetic actually supports it.
         - Uses time of day correctly: reassures ONLY when the total is
           genuinely low for that time (e.g. 400 kcal at 15:00).
-        - Acknowledges concern about high totals honestly.
+        - Acknowledges concern about high totals honestly, states the
+          correct remaining buffer (which may be zero or negative).
         - Reports numbers neutrally without spin.
 
         Conversation Input (logged meals, totals, time of day, user concern):
