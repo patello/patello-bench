@@ -1,480 +1,63 @@
-# judges ‍⚖️
-<a target="_blank" href="https://discord.com/invite/YeJzANpntv"><img src="https://dcbadge.limes.pink/api/server/YeJzANpntv" alt="" /></a>
+# patello-bench ⚖️
 
-1. [Overview](#overview)
-2. [Installation](#installation)
-3. [API](#api)
-   - [Types of Judges](#types-of-judges)
-     - [Classifiers](#classifiers)
-     - [Graders](#graders)
-   - [Using Judges](#using-judges)
-     - [Classifier Judges](#classifier-judges)
-   - [Combining Judges](#combining-judges)
-     - [Jury Object](#jury-object)
-4. [Usage](#usage)
-   - [Pick a model](#pick-a-model)
-   - [Send data to an LLM](#send-data-to-an-llm)
-   - [Use a `judges` classifier LLM as an evaluator model](#use-a-judges-classifier-llm-as-an-evaluator-model)
-   - [Use a `Jury` for averaging and diversification](#use-a-jury-for-averaging-and-diversification)
-   - [Use `AutoJudge` to create a custom LLM judge](#use-autojudge-to-create-a-custom-llm-judge)
-5. [Creating Custom Judges](#creating-custom-judges)
-6. [CLI](#cli)
-6. [Appendix of Judges](#appendix)
-   - [Classifiers](#classifiers) 
-   - [Grader](#graders) 
+A personal LLM benchmark for failure modes that matter in real assistant workloads — built as a fork of [databricks/judges](https://github.com/databricks/judges) (v0.1.1, branch `patello-bench`).
 
+It targets three failure classes observed in production agents (calorie coaching, commute briefs, transit planning), then runs a **provider matrix**: the same model pinned to different OpenRouter providers, to separate model-level weaknesses from serving-stack/quantization damage.
 
-## Overview 
-`judges` is a small library to use and create LLM-as-a-Judge evaluators. The purpose of `judges` is to have a curated set of LLM evaluators in a low-friction format across a variety of use cases that are backed by research, and can be used off-the-shelf or serve as inspiration for building your own LLM evaluators.
+## What it tests
 
-## Installation
+| Task | Judge | Failure class |
+|---|---|---|
+| `syn-swedish-day-summary` | `SwedishFabrication` | Invented Swedish words, Nordic-language intrusions, word salad |
+| `syn-swedish-commute-brief` | `SwedishFabrication` | Same, in winter-driving vocabulary ("piggdäck"-type chimera words) |
+| `syn-swedish-evening-plan` | `SwedishFabrication` | Same, in everyday-reminder register |
+| `syn-kcal-overage` | `KcalBudgetFraming` | Advising eating when the daily budget is already exceeded |
+| `syn-kcal-under-target` | `KcalBudgetFraming` | Framing remaining deficit as a budget to "spend" on treats |
+| `syn-transit-connection` | `TransitConnectionFeasibility` | Presenting implausibly tight (<5 min) or impossible transfer margins as fine routes |
+
+The judges are LLM-as-judge boolean classifiers grounded in dictionary criteria (SAOL/SO for Swedish, explicit budget/transfer-margin rules). Prompts are synthetic but modeled on real failure episodes; raw private transcripts are **not** included (see `data/private/`, git-ignored).
+
+## Layout
+
 ```
-pip install judges
+bench/gen_providers.py        # provider-pinned generation + judging matrix
+judges/classifiers/patello.py # the three custom judges
+data/public/synthetic-tasks.json  # the six task prompts
+data/private/                 # git-ignored: private transcript corpus + goldens
+results/                      # git-ignored: run outputs (JSONL per run)
 ```
 
-## API
+## Running
 
-### Types of Judges
-
-The library provides two types of judges:
-
-1. **Classifiers**: Return boolean values.
-   - `True` indicates the inputs passed the evaluation.
-   - `False` indicates the inputs did not pass the evaluation.
-
-2. **Graders**: Return scores on a numerical or Likert scale.
-   - Numerical scale: 1 to 5
-   - Likert scale: terrible, bad, average, good, excellent
-
-### Using Judges
-
-All judges can be used by calling the `.judge()` method. This method accepts the following parameters:
-- `input`: The input to be evaluated.
-- `output`: The output to be evaluated.
-- `expected` (optional): The expected result for comparison.
-
-The `.judge()` method returns a `Judgment` object with the following attributes:
-- `reasoning`: The reasoning behind the judgment.
-- `score`: The score assigned by the judge.
-
-### Classifier Judges
-
-If the underlying prompt for a classifier judge outputs a `Judgment` similar to `True` or `False` (e.g., good or bad, yes or no, 0 or 1), the `judges` library automatically resolves the outputs so that a `Judgment` only has a boolean label.
-
-### Combining Judges
-
-The library also provides an interface to combine multiple judges through the `Jury` object. The `Jury` object has a `.vote()` method that produces a `Verdict`.
-
-### Jury Object
-
-- `.vote()`: Combines the judgments of multiple judges and produces a `Verdict`.
-
-## Usage
-
-### Pick a model
-By default, `judges` uses [`instructor`](https://python.useinstructor.com/) for structured outputs and models due to its widespread use. To get started, set your `OPENAI_API_KEY` or whatever key you want for a specific model provider. Refer to the instructor docs for more providers.
-
-
-### Send data to an LLM
-Next, if you'd like to use this package, you can follow the examples in the `examples` directory, or follow the code below:
-
-```python
-from openai import OpenAI
-
-client = OpenAI()
-
-question = "What is the name of the rabbit in the following story. Respond with 'I don't know' if you don't know."
-
-story = """
-Fig was a small, scruffy dog with a big personality. He lived in a quiet little town where everyone knew his name. Fig loved adventures, and every day he would roam the neighborhood, wagging his tail and sniffing out new things to explore.
-
-One day, Fig discovered a mysterious trail of footprints leading into the woods. Curiosity got the best of him, and he followed them deep into the trees. As he trotted along, he heard rustling in the bushes and suddenly, out popped a rabbit! The rabbit looked at Fig with wide eyes and darted off.
-
-But instead of chasing it, Fig barked in excitement, as if saying, "Nice to meet you!" The rabbit stopped, surprised, and came back. They sat together for a moment, sharing the calm of the woods.
-
-From that day on, Fig had a new friend. Every afternoon, the two of them would meet in the same spot, enjoying the quiet companionship of an unlikely friendship. Fig's adventurous heart had found a little peace in the simple joy of being with his new friend.
-"""
-
-# set up the input prompt
-input = f'{story}\n\nQuestion:{question}'
-
-# write down what the model is expected to respond with
-# NOTE: not all judges require an expected answer. refer to the implementations
-expected = "I don't know"
-
-# get the model output
-output = client.chat.completions.create(
-    model='gpt-4o-mini',
-    messages=[
-        {
-            'role': 'user', 
-            'content': input,
-        },
-    ],
-).choices[0].message.content
-```
-
-### Use a `judges` classifier LLM as an evaluator model
-
-```python
-from judges.classifiers.correctness import PollMultihopCorrectness
-
-# use the correctness classifier to determine if the first model
-# answered correctly
-correctness = PollMultihopCorrectness(model='openai/gpt-4o-mini')
-
-judgment = correctness.judge(
-    input=input,
-    output=output,
-    expected=expected,
-)
-print(judgment.reasoning)
-# The 'Answer' provided ('I don't know') matches the 'Reference' text which also states 'I don't know'. Therefore, the 'Answer' correctly corresponds with the information given in the 'Reference'.
-
-print(judgment.score)
-# True
-```
-
-### Use a `Jury` for averaging and diversification
-
-A jury of LLMs can enable more diverse results and enable you to combine the judgments of multiple LLMs.
-
-```python
-from judges import Jury
-from judges.classifiers.correctness import PollMultihopCorrectness, RAFTCorrectness
-
-poll = PollMultihopCorrectness(model='openai/gpt-4o')
-raft = RAFTCorrectness(model='openai/gpt-4o-mini')
-
-jury = Jury(judges=[poll, raft], voting_method="average")
-
-verdict = jury.vote(
-    input=input,
-    output=output,
-    expected=expected,
-)
-print(verdict.score)
-```
-
-### Use `AutoJudge` to create a custom LLM judge
-
-`autojudge` is an extension to the **judges** library that builds on our [previous work](https://blog.quotientai.co/subject-matter-expert-language-liaison-smell-a-framework-for-aligning-llm-evaluators-to-human-feedback/) aligning judges to human feedback -- given a labeled dataset with feedback and a natural language description of an evaluation task, `autojudge` creates custom, task-specific LLM judges.
-
-Install it using:  
+Requires an OpenRouter API key (generation + judge model are billed per run).
 
 ```bash
-pip install "judges[auto]"
+python -m venv .venv && .venv/bin/pip install -e .
+echo 'OPENROUTER_API_KEY=sk-or-...' > .env
+set -a && . ./.env && set +a
+
+# Full matrix, all default providers, 10 samples each
+.venv/bin/python bench/gen_providers.py -N 10 --no-thinking
+
+# Single provider, single task class
+.venv/bin/python bench/gen_providers.py \
+    --providers "OpenInference,Relace" \
+    --judge-class swedish_fabrication \
+    -N 10 --no-thinking
+
+# Offline validation without any API calls
+.venv/bin/python bench/gen_providers.py --dry-run
+.venv/bin/pytest tests/ -q
 ```
 
-**Step 1 - Prepare your dataset:**
-Your dataset can be either a list of dictionaries or path to a csv file with the following fields:
+Each run writes `results/providers-<UTC-timestamp>.jsonl` — one row per (sample, task, provider) with the raw output, judge verdict, and reasoning — then prints a task × provider fail matrix.
 
-- **`input`**: The input provided to your model
-- **`output`**: The model's response
-- **`label`**: `1` for correct, `0` for incorrect  
-- **`feedback`**: Feedback explaining why the response is correct or incorrect
+### Pinned model
 
-Example:  
+Provider runs pin `deepseek/deepseek-v4-flash-0731` with `allow_fallbacks: false`, so every row is attributable to a specific serving stack (Relace, OpenInference, Baidu, DeepSeek official, ...). Provider names must match OpenRouter's current endpoint list; delisted providers 404 immediately.
 
-| input                             | output                                                              | label | feedback                              |
-|-----------------------------------|---------------------------------------------------------------------|-------|---------------------------------------|
-| What's the best time to visit Paris? | The best time to visit Paris is during the spring or fall.          | 1     | Provides accurate and detailed advice. |
-| Can I ride a dragon in Scotland? | Yes, dragons are commonly seen in the highlands and can be ridden with proper training          | 0     | Dragons are mythical creatures; the information is fictional. |
+## Interpreting results
 
-**Step 2 - Initialize your `autojudge`:**
-Provide a labeled dataset and describe the evaluation task.  
-
-```python
-from judges.classifiers.auto import AutoJudge
-
-dataset = [
-    {
-        "input": "Can I ride a dragon in Scotland?",
-        "output": "Yes, dragons are commonly seen in the highlands and can be ridden with proper training.",
-        "label": 0,
-        "feedback": "Dragons are mythical creatures; the information is fictional.",
-    },
-    {
-        "input": "Can you recommend a good hotel in Tokyo?",
-        "output": "Certainly! Hotel Sunroute Plaza Shinjuku is highly rated for its location and amenities. It offers comfortable rooms and excellent service.",
-        "label": 1,
-        "feedback": "Offers a specific and helpful recommendation.",
-    },
-    {
-        "input": "Can I drink tap water in London?",
-        "output": "Yes, tap water in London is safe to drink and meets high quality standards.",
-        "label": 1,
-        "feedback": "Gives clear and reassuring information.",
-    },
-    {
-        "input": "What's the boiling point of water on the moon?",
-        "output": "The boiling point of water on the moon is 100°C, the same as on Earth.",
-        "label": 0,
-        "feedback": "Boiling point varies with pressure; the moon's vacuum affects it.",
-    }
-]
-
-
-# Task description
-task = "Evaluate responses for accuracy, clarity, and helpfulness."
-
-# Initialize autojudge
-autojudge = AutoJudge.from_dataset(
-    dataset=dataset,
-    task=task,
-    model="openai/gpt-4-turbo-2024-04-09",
-    # increase workers for speed ⚡
-    # max_workers=2,
-    # generated prompts are automatically saved to disk
-    # save_to_disk=False,
-)
-```
-
-**Step 3 - Use your judge to evaluate new input-output pairs:**
-You can use `autojudge` to evaluate a single input-output pair using the `.judge()` method.  
-
-```python
-# Input-output pair to evaluate
-input_ = "What are the top attractions in New York City?"
-output = "Some top attractions in NYC include the Statue of Liberty and Central Park."
-
-# Get the judgment
-judgment = autojudge.judge(input=input_, output=output)
-
-# Print the judgment
-print(judgment.reasoning)
-# The response accurately lists popular attractions like the Statue of Liberty and Central Park, which are well-known and relevant to the user's query.
-print(judgment.score)
-# True (correct)
-```
-
-## Creating Custom Judges
-
-All judges inherit from the `BaseJudge` class and implement a `.judge()` method that returns a `Judgment` object.
-
-### Basic Structure
-
-```python
-from textwrap import dedent
-from judges.base import BaseJudge, Judgment
-
-class MyCustomJudge(BaseJudge):
-    def judge(
-        self,
-        input: str,
-        output: str = None,
-        expected: str = None,
-    ) -> Judgment:
-        """
-        Judge the input and return a Judgment.
-        
-        Parameters:
-        -----------
-        input: str
-            The input provided to the model to be judged.
-        output: str  
-            The output generated by the model.
-        expected: str
-            The expected output for comparison (optional).
-        
-        Returns:
-        --------
-        Judgment:
-            The evaluation result containing the score and reasoning.
-        """
-        # Optional system-level instructions
-        system_prompt = None
-        user_prompt = dedent(
-            f"""
-            Your evaluation instructions here.
-            
-            Input: {input}
-            Output: {output}
-            Expected: {expected}
-            
-            Provide your judgment below:
-            """
-        )
-        
-        reasoning, score = self._judge(
-            user_prompt=user_prompt,
-            system_prompt=system_prompt,
-        )
-        
-        return Judgment(reasoning=reasoning, score=score, score_type="boolean")
-```
-
-### Example: Politeness Judge
-
-**Step 1: Define your evaluation criteria**
-
-Start by clearly defining what you want to evaluate. For example, you might want to judge:
-- Tone and politeness of responses
-- Code quality and correctness  
-- Creative writing style
-- Factual accuracy in a specific domain
-
-**Step 2: Create your judge class**
-```python
-from textwrap import dedent
-from judges.base import BaseJudge, Judgment
-
-class PolitenessJudge(BaseJudge):
-    """
-    A judge that evaluates the politeness and respectfulness of model responses.
-    """
-    
-    def judge(
-        self,
-        input: str,
-        output: str = None,
-        expected: str = None,
-    ) -> Judgment:
-        system_prompt = "You are an expert in communication and social etiquette."
-        
-        user_prompt = dedent(
-            f"""
-            Evaluate whether the following response is polite and respectful.
-            
-            Original question: {input}
-            Response to evaluate: {output}
-            
-            Consider factors like:
-            - Use of courteous language
-            - Respectful tone
-            - Appropriate level of formality
-            - Absence of rude or dismissive language
-            
-            Return "True" if the response is polite and respectful, "False" otherwise.
-            """
-        )
-        
-        reasoning, score = self._judge(
-            user_prompt=user_prompt,
-            system_prompt=system_prompt,
-        )
-        
-        return Judgment(reasoning=reasoning, score=score, score_type="boolean")
-```
-
-**Step 3: Use your custom judge**
-```python
-# Initialize your judge
-politeness_judge = PolitenessJudge(model='openai/gpt-4o-mini')
-
-# Evaluate a response
-judgment = politeness_judge.judge(
-    input="Can you help me with my homework?",
-    output="Sure! I'd be happy to help you with your homework. What subject are you working on?"
-)
-
-print(judgment.reasoning)
-print(judgment.score)
-# True
-```
-
-### Different Score Types
-
-You can create judges that return different types of scores:
-
-**Boolean judges** (True/False):
-```python
-return Judgment(reasoning=reasoning, score=score, score_type="boolean")
-```
-
-**Numerical judges** (1-5 scale):
-```python
-return Judgment(reasoning=reasoning, score=score, score_type="numerical")
-```
-
-**Likert scale judges** (terrible, bad, average, good, excellent):
-```python
-return Judgment(reasoning=reasoning, score=score, score_type="likert")
-```
-
-
-## CLI
-
-`judges` also provides a command-line interface (CLI) for evaluating model outputs using various judges. The CLI supports both single and batch evaluations.
-
-```bash
-# Basic usage
-judges <judge_type> --model <model_name> --input <json_input> [--output output_file]
-
-# Example with a JSON string
-judges PollMultihopCorrectness -m gpt-4o-mini -i '[
-    {
-        "input": "What is the capital of France?",
-        "output": "The capital of France is Madrid.",
-        "expected": "The capital of France is Paris."
-    },
-    {
-        "input": "What is the capital of Germany?",
-        "output": "The capital of Germany is Paris.",
-        "expected": "The capital of Germany is Berlin."
-    }
-]'
-
-# Example with output file
-judges PollMultihopCorrectness --model gpt-4 --input test_cases.json --output results.json
-
-# Using short options
-judges PollMultihopCorrectness -m gpt-4 -i test_cases.json -o results.json
-```
-
-The CLI accepts the following parameters:
-- `judge`: The type of judge to use (see [Classifiers](#classifiers-1))
-- `--model` or `-m`: The name of the model to use (e.g., "gpt-4", "<provider>/<model_name>")
-- `--input` or `-i`: Either a JSON string or path to a JSON file containing test cases
-- `--output` or `-o` (optional): Path to save the results (if not provided, prints to stdout)
-
-Each test case in the JSON input must have:
-- `input`: The input provided to the model
-- `output`: The output generated by the model
-
-And optionally:
-- `expected`: The expected output for comparison
-
-The CLI will return a JSON object containing the original input, output, expected values, judgment score, and reasoning for each test case.
-It will be saved to the output file or printed to `stdout` if no output file is specified.
-
-## Appendix
-
-### Classifiers
-
-| Judge Type | Category                 | Description                                                                                                                                                                                                                                                                                                                                                                                                                                  | Reference Paper                                                                                                                                                                                                                                                                                   | Python Import                                                                                                                           |
-|------------|--------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
-| classifier | Factual Correctness      | Evaluates the factual correctness of a generated response against a reference answer using few-shot learning. It compares the provided answer with the reference answer to determine its accuracy.                                                                                                                                                                                                                                                 | [Replacing Judges with Juries: Evaluating LLM Generations with a Panel of Diverse Models](https://arxiv.org/abs/2404.18796)                                                                                                                                                             | ```from judges.classifiers.correctness import PollMultihopCorrectness```                                               |
-| classifier | Factual Correctness      | Assesses the factual accuracy of an AI assistant's response against a reference answer without relying on example-based (few-shot) learning. It determines whether the provided answer aligns with the reference answer based on factual information.                                                                                                                                                                                         | [Replacing Judges with Juries: Evaluating LLM Generations with a Panel of Diverse Models](https://arxiv.org/abs/2404.18796)                                                                                                                                                             | ```from judges.classifiers.correctness import PollZeroShotCorrectness```                                               |
-| classifier | Factual Correctness      | Evaluates the factual correctness of responses based on the KILT (Knowledge Intensive Language Tasks) version of Natural Questions. It uses few-shot learning to compare the AI assistant's response with the reference answer to assess accuracy.                                                                                                                                                                                         | [Replacing Judges with Juries: Evaluating LLM Generations with a Panel of Diverse Models](https://arxiv.org/abs/2404.18796)                                                                                                                                                             | ```from judges.classifiers.correctness import PollKiltNQCorrectness```                                                 |
-| classifier | Factual Correctness      | Assesses the factual correctness of responses based on the KILT version of HotpotQA. It utilizes few-shot learning to determine whether the AI assistant's response aligns with the reference answer, ensuring accuracy and consistency.                                                                                                                                                                                                  | [Replacing Judges with Juries: Evaluating LLM Generations with a Panel of Diverse Models](https://arxiv.org/abs/2404.18796)                                                                                                                                                             | ```from judges.classifiers.correctness import PollKiltHotpotCorrectness```                                             |
-| classifier | Factual Correctness      | Evaluates the factual correctness of responses using LLAMA-based methods as part of the RAFT (Adapting Language Model to Domain Specific RAG) framework. It determines the accuracy of the AI assistant's response by comparing it with the reference answer based on predefined criteria.                                                                                                                                                             | [RAFT: Adapting Language Model to Domain Specific RAG](https://arxiv.org/abs/2403.10131)                                                                                                                                                                                           | ```from judges.classifiers.correctness import RAFTCorrectness```                                                        |
-| classifier | Hallucination Evaluation | Determines whether a provided answer contains non-factual or hallucinated information based on predefined hallucination types and world knowledge. It evaluates the factual integrity of the AI assistant's response to ensure accuracy and reliability.                                                                                                                                                                                   | [HaluEval: A Large-Scale Hallucination Evaluation Benchmark for Large Language Models](https://arxiv.org/abs/2305.11747)                                                                                                                                                            | ```from judges.classifiers.hallucination import HaluEvalAnswerNonFactual```                                            |
-| classifier | Hallucination Evaluation | Evaluates whether a dialogue response contains non-factual or hallucinated information by analyzing the response against predefined hallucination types and world knowledge. It ensures that the AI assistant's responses are factually accurate within the context of the dialogue.                                                                                                                                                         | [HaluEval: A Large-Scale Hallucination Evaluation Benchmark for Large Language Models](https://arxiv.org/abs/2305.11747)                                                                                                                                                            | ```from judges.classifiers.hallucination import HaluEvalDialogueResponseNonFactual```                                  |
-| classifier | Hallucination Evaluation | Assesses whether a document summary contains non-factual or hallucinated information by comparing it against the source document. It ensures the summary accurately reflects the content without introducing incorrect or fabricated details.                                                                                                                                                                                             | [HaluEval: A Large-Scale Hallucination Evaluation Benchmark for Large Language Models](https://arxiv.org/abs/2305.11747)                                                                                                                                                            | ```from judges.classifiers.hallucination import HaluEvalDocumentSummaryNonFactual```                                   |
-| classifier | Harmfulness Evaluation   | Evaluates whether an AI assistant's response contains harmful content, including harmful, dangerous, unethical, illegal, or hostile information. It assesses the response for alignment with trustworthy language model guidelines to ensure the safety and reliability of the output.                                                                                                                                                                          | [Trustworthy LLMs: a Survey and Guideline for Evaluating Large Language Models' Alignment](https://arxiv.org/abs/2308.05374)                                                                                                                                                     | ```from judges.classifiers.harmfulness import TrustworthyLLMHarmfulness```                                           |
-| classifier | Query Quality Evaluation | Evaluates the quality of a query based on clarity, specificity, and relevance. It assesses whether the query is well-structured and aligned with the desired information retrieval objectives, ensuring that the queries facilitate accurate and relevant responses from the AI assistant.                                                                                                                                                                        | [FactAlign: Long-form Factuality Alignment of Large Language Models](https://arxiv.org/abs/2410.01691)                                                                                                                                                                              | ```from judges.classifiers.query_quality import FactAlignQueryQuality```                                               |
-| classifier | Refusal Evaluation       | Evaluates whether an AI assistant's response refuses to complete a given task. It determines if the response is a refusal based on predefined criteria, ensuring that the AI adheres to ethical guidelines and alignment policies when declining to assist with certain requests.                                                                                                                                                                         | [Trustworthy LLMs: a Survey and Guideline for Evaluating Large Language Models' Alignment](https://arxiv.org/abs/2308.05374)                                                                                                                                                     | ```from judges.classifiers.refusal import TrustworthyLLMRefusal```                                                   |
-
----
-
-
-### Graders
-
-| Judge Type | Category                       | Description                                                                                                                                                                                                                                                                                                                                                                                                                              | Reference Paper                                                                                                                                                             | Python Import                                                                                                                           |
-|------------|--------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
-| grader     | Factual Correctness            | Evaluates the correctness of a response in an Absolute Grading setting, according to a scoring rubric.                                                                                                                                                                                                                                                                                                                                 | [Prometheus: Inducing Fine-grained Evaluation Capability in Language Models](https://arxiv.org/abs/2310.08491)                                                               | `from judges.graders.correctness import PrometheusAbsoluteCoarseCorrectness`                                                        |
-| grader     | Empathy Evaluation             | Evaluates the response of a model based on its ability to recognize implicit emotions in a statement, using a 3-point scale.                                                                                                                                                                                                                                                                                                                  | [EmotionQueen: A Benchmark for Evaluating Empathy of Large Language Models](https://arxiv.org/abs/2409.13359)                                                             | `from judges.graders.empathy import EmotionQueenImplicitEmotionRecognition`                                                          |
-| grader     | Empathy Evaluation             | Evaluates the response of a model based on its ability to recognize the hidden intention in a statement, using a 3-point scale.                                                                                                                                                                                                                                                                                                                   | [EmotionQueen: A Benchmark for Evaluating Empathy of Large Language Models](https://arxiv.org/abs/2409.13359)                                                             | `from judges.graders.empathy import EmotionQueenIntentionRecognition`                                                               |
-| grader     | Empathy Evaluation             | Evaluates the response of a model based on its ability to recognize the key event in a statement, using a 3-point scale.                                                                                                                                                                                                                                                                                                                              | [EmotionQueen: A Benchmark for Evaluating Empathy of Large Language Models](https://arxiv.org/abs/2409.13359)                                                             | `from judges.graders.empathy import EmotionQueenKeyEventRecognition`                                                                 |
-| grader     | Empathy Evaluation             | Evaluates the response of a model based on its ability to recognize both the significant and trivial events in a statement, using a 3-point scale.                                                                                                                                                                                                                                                                                                | [EmotionQueen: A Benchmark for Evaluating Empathy of Large Language Models](https://arxiv.org/abs/2409.13359)                                                             | `from judges.graders.empathy import EmotionQueenMixedEventRecognition`                                                               |
-| grader     | Information Coverage Evaluation | Determines whether a specific reference insight is fully, partially, or not covered within a provided list of bullet points, ensuring comprehensive coverage of key information.                                                                                                                                                                                                                                                                 | [Summary of a Haystack: A Challenge to Long-Context LLMs and RAG Systems](https://arxiv.org/abs/2407.01370)                                                                 | `from judges.graders.information_coverage import HaystackBulletPointCoverageCorrectness`                                               |
-| grader     | Content Moderation             | Categorizes user input texts into predefined categories such as hate, self-harm, sexual content, etc., determining the appropriate category based on the content's nature and intent.                                                                                                                                                                                                                                                       | [OR-Bench: An Over-Refusal Benchmark for Large Language Models](https://arxiv.org/abs/2405.20947)                                                                        | `from judges.graders.moderator import ORBenchUserInputModeration`                                                                   |
-| grader     | Content Moderation             | Classifies model output texts into one of eleven predefined categories related to content sensitivity and appropriateness, ensuring responses adhere to ethical and safety guidelines.                                                                                                                                                                                                                                                 | [OR-Bench: An Over-Refusal Benchmark for Large Language Models](https://arxiv.org/abs/2405.20947)                                                                        | `from judges.graders.moderator import ORBenchUserOutputModeration`                                                                  |
-| grader     | Query Quality Evaluation       | Assesses the quality of user queries based on clarity, specificity, and coherence, ensuring that queries are well-structured to facilitate accurate and relevant responses.                                                                                                                                                                                                                                                                  | [Magpie: Alignment Data Synthesis from Scratch by Prompting Aligned LLMs with Nothing](https://api.semanticscholar.org/CorpusID:270391432)                                   | `from judges.graders.query_quality import MagpieQueryQuality`                                                                         |
-| grader     | Refusal Evaluation             | Classifies AI assistant responses into direct_answer, direct_refusal, or indirect_refusal, evaluating whether the assistant appropriately refuses to answer certain prompts based on ethical guidelines.                                                                                                                                                                                                                                         | [Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena](https://arxiv.org/abs/2306.05685)                                                                               | `from judges.graders.refusal_detection import ORBenchRefusalDetection`                                                                 |
-| grader     | Relevance Evaluation           | Evaluates the relevance of a passage to a query based on a four-point scale: Irrelevant, Related, Highly relevant, Perfectly relevant. Ensures that the passage adequately addresses the query with varying degrees of relevance.                                                                                                                                                                                                          | [Reliable Confidence Intervals for Information Retrieval Evaluation Using Generative A.I.](https://doi.org/10.1145/3637528.3671883)                                         | `from judges.graders.relevance import ReliableCIRelevance`                                                                             |
-| grader     | Response Quality Evaluation    | Evaluates the quality of the AI assistant's response based on helpfulness, relevance, accuracy, depth, creativity, and level of detail, assigning a numerical grade.                                                                                                                                                                                                                                                                      | [Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena](https://arxiv.org/abs/2306.05685)                                                                               | `from judges.graders.response_quality import MTBenchChatBotResponseQuality`                                                            |
-| grader     | Summary Evaluation             | Evaluates the quality of summaries of given source texts on multiple aspects, using a 5-point scale                                                                                                                                                                                                                                                                                                                                        | [HypoEval: Hypothesis-Guided Evaluation for Natural Language Generation](https://arxiv.org/abs/2504.07174)                                                                 | `from judges.graders.hypoeval import HypoEvalSummary`                                                                                 |
-| grader     | Story Evaluation               | Evaluates the quality of stories generated in response to given prompts on multiple aspects, using a 5-point scale                                                                                                                                                                                                                                                                                                                       | [HypoEval: Hypothesis-Guided Evaluation for Natural Language Generation](https://arxiv.org/abs/2504.07174)                                                                 | `from judges.graders.hypoeval import HypoEvalStory`                                                                                   |
----
+- Compare providers per task, not just on aggregate totals — one systematic failure on a single task can dominate an otherwise-flat matrix.
+- At N=10 per task, differences need Fisher exact (or larger N) before you trust them; ~N=30 per contested task is the minimum for a defensible call.
+- Cross-provider recurrence of the *same* fabricated word (e.g. "piggdäck") indicates model-level contamination; a failure unique to one provider indicates serving-stack damage.
