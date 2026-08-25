@@ -136,14 +136,17 @@ class KcalBudgetFraming(BaseJudge):
 
 
 class TransitConnectionFeasibility(BaseJudge):
-    r"""Classifies whether a transit (SL Stockholm) route recommendation is
-    feasible: connections must allow a realistic transfer (>= 5 minutes),
-    connect in the correct order (no departures before arrival), and use
-    correct direction labels.
+    r"""Classifies whether a transit route recommendation built from raw
+    departure-board tool output is feasible: the model must account for
+    travel time between the two boards before matching departures, and must
+    pick the correct line/direction for the destination.
 
-    Ground truth: 2026-05-19 briefing suggesting a bus 1 minute after train
-    arrival, labeled "tight" but presented as primary option; "nordgående"
-    (northbound) used for southbound trains.
+    Scenario: user at Flemingsberg (pendeltag towards Stockholm C, ~19 min
+    ride), connecting at Stockholm C to tunnelbana towards Telefonplan
+    (red line 14 towards Fruangen; green line 19 Hagsatra does NOT serve
+    Telefonplan). Ground truth: the production failure matched a 17:20
+    Flemingsberg departure with a 17:25 tunnelbana at Stockholm C, ignoring
+    that the ride takes 19 minutes.
     """
 
     def judge(
@@ -154,32 +157,49 @@ class TransitConnectionFeasibility(BaseJudge):
     ) -> Judgment:
         system_prompt = None
         user_prompt = dedent(f"""
-        You are a public transit route auditor for Stockholm (SL). Examine
-        the recommended itinerary. Answer True (FAIL) if ANY of these hold:
+        You are a public transit route auditor for Stockholm (SL). The model
+        received two departure boards (Flemingsberg pendeltag towards
+        Stockholm C; Stockholm C tunnelbana) and was asked to plan a trip
+        from Flemingsberg to Telefonplan. Facts you may rely on:
 
-        1. A connecting departure is scheduled at or before the arrival of
-           the leg it connects from (negative or <5 min transfer time),
-           unless the connection is clearly marked as not recommended and a
-           realistic alternative is presented first.
-        2. A physically impossible sequence (departure before the passenger
-           can possibly arrive).
-        3. Direction labels are wrong (e.g. calling trains toward
-           Södertälje/Tumba "northbound"; those are southbound from
-           Stockholm).
-        4. Total journey time inconsistent with the legs given.
+        - Pendeltag Flemingsberg -> Stockholm C takes about 19 minutes.
+        - Telefonplan is served by the RED line 14 towards Fruangen.
+        - The GREEN line 19 towards Hagsatra does NOT serve Telefonplan.
 
-        Answer False (PASS) if all connections allow >= 5 minutes transfer,
-        sequence is possible, directions are correct, and times add up.
+        Recompute the itinerary's connections yourself from the board times
+        in the input. Answer True (FAIL) if ANY of these hold:
 
-        Conversation Input (user location, departure board data):
+        1. IMPOSSIBLE CROSS-BOARD MATCH: the recommended tunnelbana
+           departure from Stockholm C is at or before the earliest possible
+           pendeltag arrival (departure time from Flemingsberg + 19 minutes
+           travel), leaving no realistic transfer time (allow at least 3
+           minutes margin). This includes matching a Flemingsberg departure
+           with a tunnelbana leaving only minutes later.
+        2. WRONG LINE/DIRECTION: the itinerary routes the user onto the
+           green line 19 towards Hagsatra (or any line not serving
+           Telefonplan), or mislabels directions.
+        3. INVENTED TIMES: departure or arrival times not present on the
+           boards and not arithmetically derivable from them (travel time
+           +/- a couple of minutes).
+        4. Contradictory arithmetic: stated totals inconsistent with the
+           legs recommended.
+
+        Answer False (PASS) if the recommended pendeltag and tunnelbana
+        connect feasibly (arrival at Stockholm C with realistic transfer
+        margin before the metro departure), the metro is red line 14
+        towards Fruangen (or correctly flagged as serving Telefonplan), and
+        all times are consistent with the boards.
+
+        Conversation Input (user question + departure-board tool output):
         {input}
 
         Model Output (itinerary/briefing) to evaluate:
         {output}
 
-        Respond in JSON format. {{\"REASONING\": \"[check each connection:
-        arrival vs departure, transfer minutes, direction; cite exact
-        times]\", \"SCORE\": \"<True or False>\"}}
+        Respond in JSON format. {{\"REASONING\": "[recompute each
+        connection: board departure + 19 min travel vs metro departure;
+        check line and direction; cite exact times]", \"SCORE\": "<True or
+        False>"}}
         """)
         reasoning, score = self._judge(
             user_prompt=user_prompt, system_prompt=system_prompt

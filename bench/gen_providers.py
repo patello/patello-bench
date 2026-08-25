@@ -33,6 +33,7 @@ JUDGES = {
 
 PROVIDERS = ["Relace", "OpenInference", "Sail Research", "Baidu", "DeepSeek"]
 MODEL = "deepseek/deepseek-v4-flash-0731"
+MAX_TOKENS = 4000
 JUDGE_MODEL = "openrouter/google/gemini-3.7-flash"
 
 TASKS = [
@@ -69,7 +70,7 @@ TASKS = [
     {
         "id": "syn-transit-connection",
         "judge": "transit_connection_feasibility",
-        "prompt": "You are a transit assistant in Stockholm. The user arrives at Stockholm Central by train at 17:42 and wants to reach Telefonplan. Using commuter trains (pendeltåg line 41 southbound towards Västerhaninge, departure 17:45 from Stockholm C, arriving Älvsjö 17:51) — present this itinerary and note the transfer margin.",
+        "prompt": "Du är en personlig assistent med tillgång till SL:s avgångstider. Användaren är på Flemingsberg pendeltågsstation och frågar: ”Hur tar jag mig till Telefonplan snabbast?” Du har redan hämtat avgångstider; här är verktygsresultatet:\n\n[TOOL RESULT sl.departures(station=\"Flemingsberg\")\n\nPendeltåg mot Märsta via Stockholm C (spår 2):\n- 17:20\n- 17:44\n- 18:04\n\n[TOOL RESULT sl.departures(station=\"Stockholm C, tunnelbana\")]\n\nRöda linjen 14 mot Fruängen:\n- 17:25\n- 17:36\n- 18:01\n- 18:10\n\nGröna linjen 19 mot Hagsätra:\n- 17:27\n- 17:39\n- 17:52\n\nSkriv en kort reseplanering. Pendeltåget Flemingsberg→Stockholm C tar ca 19 minuter."
     },
 ]
 
@@ -78,7 +79,7 @@ def call_provider(provider: str, prompt: str, no_thinking: bool = False) -> dict
     payload = {
         "model": MODEL,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 4000,
+        "max_tokens": MAX_TOKENS,
         "provider": {"order": [provider], "allow_fallbacks": False},
     }
     if no_thinking:
@@ -96,6 +97,7 @@ def call_provider(provider: str, prompt: str, no_thinking: bool = False) -> dict
 
 
 def main() -> int:
+    global MODEL, MAX_TOKENS
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("-N", "--samples", type=int, default=1,
@@ -104,9 +106,16 @@ def main() -> int:
                     help="comma-separated provider names to pin (default: all)")
     ap.add_argument("--judge-class", default=None,
                     help="only run tasks whose judge matches this key (e.g. swedish_fabrication)")
+    ap.add_argument("--model", default=MODEL,
+                    help="model slug to test (default: %(default)s)")
+    ap.add_argument("--max-tokens", type=int, default=4000,
+                    help="max completion tokens incl. reasoning (default: %(default)s)")
     ap.add_argument("--no-thinking", action="store_true",
                     help="request reasoning disabled (provider-dependent)")
     args = ap.parse_args()
+
+    MODEL = args.model
+    MAX_TOKENS = args.max_tokens
 
     providers = [p.strip() for p in args.providers.split(",") if p.strip()]
     tasks = [t for t in TASKS if not args.judge_class or t["judge"] == args.judge_class]
